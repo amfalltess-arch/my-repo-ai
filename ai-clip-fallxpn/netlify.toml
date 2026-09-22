@@ -1,0 +1,19 @@
+# Netlify builds Next.js automatically (OpenNext adapter, zero config).
+# IMPORTANT: deploy through Git or `netlify deploy --build`. Uploading the raw
+# source files (a plain "deploy folder") skips the build and gives a 404 page.
+
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "20"
+  NEXT_TELEMETRY_DISABLED = "1"
+  # NEXT_PUBLIC_* values are inlined into the browser bundle on purpose; keep
+  # Netlify's secrets scanner from failing the build because of them.
+  SECRETS_SCAN_OMIT_KEYS = "NEXT_PUBLIC_APP_URL,NEXT_PUBLIC_API_URL"
+
+# Default synchronous function timeout is 10 s. On paid plans you can raise it
+# (up to 26 s) by asking Netlify support, then uncommenting:
+# [functions]
+#   timeout = 26

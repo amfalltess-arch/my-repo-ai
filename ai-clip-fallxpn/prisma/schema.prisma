@@ -1,0 +1,504 @@
+// AI ClipFlow — database schema
+//
+// Naming note: the spec (section 34) calls the AI abstraction interface
+// "AIProvider". To avoid a name clash with that TypeScript interface, the
+// admin-configurable provider row here is called `AIProviderConfig`. Every
+// other model name matches section 52 of the spec exactly.
+
+generator client {
+  provider      = "prisma-client-js"
+  // "rhel-openssl-3.0.x" is the runtime Vercel uses for serverless functions.
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Enums
+// ─────────────────────────────────────────────────────────────────────────
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum VideoSourceType {
+  UPLOAD
+  YOUTUBE
+  IMPORTED
+}
+
+enum VideoStatus {
+  PENDING
+  ANALYZING
+  READY
+  FAILED
+}
+
+enum GenerationStatus {
+  QUEUED
+  ANALYZING
+  TRANSCRIBING
+  FINDING_HIGHLIGHTS
+  GENERATING_CLIPS
+  AUTO_EDITING
+  GENERATING_SUBTITLES
+  RENDERING
+  GENERATING_METADATA
+  COMPLETED
+  COMPLETED_WITH_WARNINGS
+  FAILED
+}
+
+enum ClipStatus {
+  PENDING
+  CUTTING
+  EDITING
+  SUBTITLING
+  RENDERING
+  READY
+  FAILED
+}
+
+enum ContentType {
+  FUNNY
+  PODCAST
+  GAMING
+  STORY
+  EDUCATION
+  MOTIVATION
+  DRAMA
+  REACTION
+  INTERVIEW
+  NEWS
+  GENERAL
+}
+
+enum AspectRatio {
+  RATIO_9_16
+  RATIO_1_1
+  RATIO_16_9
+}
+
+enum SubtitleStyle {
+  KARAOKE
+  BOLD
+  MINIMAL
+  HIGHLIGHT_WORD
+  PODCAST
+  GAMING
+  MODERN
+  CLEAN
+}
+
+enum AIProviderType {
+  GEMINI
+  CUSTOM
+}
+
+enum PublishStatus {
+  WAITING
+  PROCESSING
+  UPLOADING
+  PUBLISHED
+  FAILED
+  RETRYING
+  CANCELLED
+}
+
+enum ProcessingJobType {
+  VIDEO_ANALYSIS
+  TRANSCRIPTION
+  HIGHLIGHT_DETECTION
+  CLIP_GENERATION
+  AUTO_EDIT
+  SUBTITLE_GENERATION
+  RENDER_VIDEO
+  METADATA_GENERATION
+  ZIP_GENERATION
+  TIKTOK_UPLOAD
+  TIKTOK_PUBLISH
+  TIKTOK_STATUS
+}
+
+enum ProcessingJobStatus {
+  PENDING
+  ACTIVE
+  COMPLETED
+  FAILED
+  RETRYING
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Identity
+// ─────────────────────────────────────────────────────────────────────────
+
+model User {
+  id           String @id @default(cuid())
+  email        String @unique
+  passwordHash String
+  name         String?
+  role         Role   @default(USER)
+
+  // Per-user limits (section 33). Null = fall back to SystemSetting default.
+  maxVideosPerGeneration Int?
+  maxVideoDurationSec    Int?
+  maxUploadSizeMb        Int?
+  dailyGenerationLimit   Int?
+  concurrentJobLimit     Int? @default(3)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sessions         Session[]
+  videos           Video[]
+  generations      Generation[]
+  contentTemplates ContentTemplate[]
+  tiktokAccounts   TikTokAccount[]
+  auditLogs        AuditLog[]
+
+  @@index([email])
+}
+
+model Session {
+  id             String   @id @default(cuid())
+  userId         String
+  hashedToken    String   @unique
+  userAgent      String?
+  ipAddress      String?
+  expiresAt      DateTime
+  createdAt      DateTime @default(now())
+  lastActivityAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Source video & AI analysis
+// ─────────────────────────────────────────────────────────────────────────
+
+model Video {
+  id         String          @id @default(cuid())
+  userId     String
+  sourceType VideoSourceType
+  sourceUrl  String?
+
+  title        String?
+  channel      String?
+  durationSec  Int?
+  thumbnailUrl String?
+  resolution   String?
+
+  status          VideoStatus @default(PENDING)
+  failureReason   String?
+  // User attestation that they hold rights to this content (section 3).
+  rightsConfirmed Boolean     @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assets      VideoAsset[]
+  analyses    AIAnalysis[]
+  generations Generation[]
+
+  @@index([userId, createdAt])
+}
+
+model VideoAsset {
+  id         String   @id @default(cuid())
+  videoId    String
+  // "source" | "proxy" | "transcript" | "waveform" | "thumbnail"
+  kind       String
+  storageKey String
+  mimeType   String?
+  sizeBytes  Int?
+  createdAt  DateTime @default(now())
+
+  video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@index([videoId, kind])
+}
+
+model AIAnalysis {
+  id         String         @id @default(cuid())
+  videoId    String
+  provider   AIProviderType
+  // Full transcript with word-level timestamps, as produced by the
+  // transcription worker. Shape: TranscriptSegment[] (see src/lib/ai/types.ts)
+  transcript Json?
+  // Raw highlight candidates before duplicate filtering.
+  // Shape: HighlightCandidate[]
+  candidates Json
+  createdAt  DateTime       @default(now())
+
+  video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@index([videoId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Generation batch & clips
+// ─────────────────────────────────────────────────────────────────────────
+
+model Generation {
+  id       String @id @default(cuid())
+  videoId  String
+  userId   String
+
+  requestedCount Int
+  actualCount    Int?
+
+  contentType      ContentType
+  clipLengthMinSec Int
+  clipLengthMaxSec Int
+  aspectRatio      AspectRatio @default(RATIO_9_16)
+
+  subtitleEnabled Boolean       @default(true)
+  subtitleStyle   SubtitleStyle @default(BOLD)
+
+  contentTemplateId String?
+  textVariantCount  Int     @default(1)
+  // "same_bio_same_cta_unique_description" | "same_bio_same_all" |
+  // "same_bio_unique_description_unique_hashtags" | "full_unique"
+  batchTextMode     String  @default("same_bio_same_cta_unique_description")
+
+  autoPostEnabled Boolean   @default(false)
+  scheduleId      String?   @unique
+
+  status        GenerationStatus @default(QUEUED)
+  progress      Int              @default(0)
+  currentStep   String?
+  failureReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  video           Video            @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contentTemplate ContentTemplate? @relation(fields: [contentTemplateId], references: [id])
+  schedule        Schedule?        @relation(fields: [scheduleId], references: [id])
+  clips           Clip[]
+  processingJobs  ProcessingJob[]
+
+  @@index([userId, createdAt])
+  @@index([videoId])
+}
+
+model Clip {
+  id           String @id @default(cuid())
+  generationId String
+  index        Int
+
+  startSec Float
+  endSec   Float
+
+  title       String?
+  description String?
+  hashtags    String[]
+  score       Int?
+  category    String?
+  reason      String?
+
+  status        ClipStatus @default(PENDING)
+  failureReason String?
+
+  renderedStorageKey  String?
+  thumbnailStorageKey String?
+  durationSec         Float?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  generation   Generation    @relation(fields: [generationId], references: [id], onDelete: Cascade)
+  captions     Caption[]
+  textVariants TextVariant[]
+  publishJobs  PublishJob[]
+
+  @@unique([generationId, index])
+  @@index([generationId, status])
+}
+
+model Caption {
+  id         String   @id @default(cuid())
+  clipId     String
+  // "srt" | "vtt" | "ass" | "word-level-json"
+  format     String
+  storageKey String?
+  content    Json?
+  createdAt  DateTime @default(now())
+
+  clip Clip @relation(fields: [clipId], references: [id], onDelete: Cascade)
+
+  @@index([clipId])
+}
+
+model TextVariant {
+  id          String   @id @default(cuid())
+  clipId      String
+  // "A", "B", "C" ...
+  label       String
+  title       String?
+  description String?
+  caption     String?
+  createdAt   DateTime @default(now())
+
+  clip Clip @relation(fields: [clipId], references: [id], onDelete: Cascade)
+
+  @@unique([clipId, label])
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Templates
+// ─────────────────────────────────────────────────────────────────────────
+
+model ContentTemplate {
+  id          String  @id @default(cuid())
+  // null = global template created by an admin (section 32)
+  userId      String?
+  name        String
+  bio         String
+  cta         String?
+  hashtags    String[]
+  description String?
+  titleFormat String?
+  isGlobal    Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user        User?        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  generations Generation[]
+
+  @@index([userId])
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// TikTok
+// ─────────────────────────────────────────────────────────────────────────
+
+model TikTokAccount {
+  id           String @id @default(cuid())
+  userId       String
+  tiktokOpenId String
+  username     String
+  avatarUrl    String?
+
+  accessTokenEnc  String
+  refreshTokenEnc String
+  scope           String
+  tokenExpiresAt  DateTime
+  refreshExpiresAt DateTime?
+
+  status     String    @default("connected") // connected | expired | revoked
+  lastUsedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  publishJobs PublishJob[]
+
+  @@unique([userId, tiktokOpenId])
+}
+
+model PublishJob {
+  id              String   @id @default(cuid())
+  clipId          String
+  tiktokAccountId String
+
+  caption      String
+  privacyLevel String  @default("SELF_ONLY")
+  scheduledFor DateTime?
+
+  status       PublishStatus @default(WAITING)
+  attempts     Int           @default(0)
+  lastError    String?
+  publishId    String? // TikTok's publish_id, for status polling
+  tiktokPostId String?
+  publishedAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  clip          Clip          @relation(fields: [clipId], references: [id], onDelete: Cascade)
+  tiktokAccount TikTokAccount @relation(fields: [tiktokAccountId], references: [id], onDelete: Cascade)
+
+  @@index([status, scheduledFor])
+  @@index([clipId])
+}
+
+model Schedule {
+  id           String   @id @default(cuid())
+  startAt      DateTime
+  intervalMin  Int
+  timezone     String
+  createdAt    DateTime @default(now())
+
+  generation Generation?
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Processing & platform
+// ─────────────────────────────────────────────────────────────────────────
+
+model ProcessingJob {
+  id           String              @id @default(cuid())
+  generationId String?
+  clipId       String?
+  type         ProcessingJobType
+  status       ProcessingJobStatus @default(PENDING)
+  progress     Int                 @default(0)
+  payload      Json?
+  result       Json?
+  error        String?
+  attempts     Int                 @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  generation Generation? @relation(fields: [generationId], references: [id], onDelete: Cascade)
+
+  @@index([generationId])
+  @@index([type, status])
+}
+
+model AIProviderConfig {
+  id            String         @id @default(cuid())
+  type          AIProviderType @unique
+  name          String
+  baseUrl       String?
+  apiKeyEnc     String?
+  model         String?
+  temperature   Float          @default(0.7)
+  maxTokens     Int            @default(8192)
+  timeoutMs     Int            @default(60000)
+  customHeaders Json?
+  enabled       Boolean        @default(false)
+  updatedAt     DateTime       @updatedAt
+}
+
+model SystemSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  action    String
+  metadata  Json?
+  ip        String?
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([action])
+}

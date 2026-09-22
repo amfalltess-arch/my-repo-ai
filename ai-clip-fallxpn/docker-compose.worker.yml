@@ -1,0 +1,18 @@
+# Runs ONLY the background worker. Use this when the web app is hosted on
+# Netlify/Vercel and Postgres, Redis and object storage (R2/S3) are hosted
+# services, so nothing else needs to run on this server.
+#
+#   docker compose -f docker-compose.worker.yml up -d --build
+#   docker compose -f docker-compose.worker.yml logs -f
+services:
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - worker_tmp:/data/tmp
+
+volumes:
+  worker_tmp:

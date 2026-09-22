@@ -1,0 +1,62 @@
+{
+  "name": "ai-clip-fallxpn",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "prisma generate && next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "worker": "tsx src/lib/queue/worker-entry.ts",
+    "worker:dev": "tsx watch src/lib/queue/worker-entry.ts",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:migrate:deploy": "prisma migrate deploy",
+    "prisma:studio": "prisma studio",
+    "postinstall": "prisma generate",
+    "deploy:netlify": "npx netlify-cli deploy --build --prod",
+    "deploy:vercel": "npx vercel deploy --prod"
+  },
+  "dependencies": {
+    "next": "^16.2.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "@prisma/client": "^5.22.0",
+    "ioredis": "^5.4.2",
+    "bullmq": "^5.21.0",
+    "zod": "^3.24.1",
+    "bcryptjs": "^2.4.3",
+    "jose": "^5.9.6",
+    "@aws-sdk/client-s3": "^3.729.0",
+    "@aws-sdk/s3-request-presigner": "^3.729.0",
+    "sharp": "^0.33.5",
+    "luxon": "^3.5.0",
+    "lucide-react": "^0.468.0",
+    "clsx": "^2.1.1",
+    "archiver": "^7.0.1",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "@types/node": "^20.17.9",
+    "@types/react": "^19.0.1",
+    "@types/react-dom": "^19.0.2",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/luxon": "^3.4.2",
+    "@types/archiver": "^6.0.3",
+    "prisma": "^5.22.0",
+    "tailwindcss": "^3.4.16",
+    "postcss": "^8.4.49",
+    "autoprefixer": "^10.4.20",
+    "eslint": "^9.16.0",
+    "eslint-config-next": "^16.2.0",
+    "tsx": "^4.19.2",
+    "vitest": "^2.1.8"
+  }
+}
